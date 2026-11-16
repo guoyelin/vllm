@@ -267,7 +267,8 @@ worker 直接把 EMBED/UNEMBED 批次交给 `execute_lwd_embed()` 和
 - 新增 `LwdEdgeModelRunnerV2(LwdEdgeModelRunner, NPUModelRunner)`，声明真实的
   `runner_kind="v2"`。构造时显式调用 `NPUModelRunner.__init__()`，并初始化原 V1
   `LwdBaseModelRunner` 负责的 pinned staging ring、worker 和边端执行状态；不能依赖多继承
-  MRO 中的隐式 `super()` 完成初始化，否则会进入 V1 基类。
+  MRO 中的隐式 `super()` 完成初始化，否则会进入 V1 基类。V1 的只读 `use_dcp` property
+  与原生 V2 的赋值不兼容，子类必须提供可写 setter，并用真实单 rank 构造覆盖这类冲突。
 - `load_model()` 显式调用 `NPUModelRunner.load_model()`，随后执行共享的
   `_load_lwd_edge_hash_tables()`。V1 仍由 `LwdBaseModelRunner.load_model()` 加载，两个版本
   都只加载一次模型，不复制权重加载或 DeepSeek V4 Hash 表解析逻辑。
@@ -613,8 +614,9 @@ sequenceDiagram
     扩展点。
 12. V1 无回归：既有 LWD 单测保持通过，V1 runner、token rank、pinned staging 和 DOWN
     路径没有因 V2 接入被替换。
-13. 边端 V2 接入：worker 按开关选择 runner 和 `runner_kind`；V2 是原生
-    `NPUModelRunner`，只调用一次原生 V2 模型加载，随后复用共享 Hash 表加载。
+13. 边端 V2 接入：worker 按开关选择 runner 和 `runner_kind`；真实单 rank 构造覆盖
+    V1 只读属性与 V2 初始化赋值的冲突；V2 只调用一次原生 V2 模型加载，随后复用共享
+    Hash 表加载。
 
 UT 优先扩展现有 `test_lwd_*`、worker/v2 和控制面测试；每个测试只覆盖一个行为，
 真实构造对象，不以“未抛异常”作为唯一判据。
@@ -700,7 +702,7 @@ MRV2 后端可以复用同一套新增公共执行语义，历史上移则作为
 - 新增上游 LWD 与 AsyncOutput 用例：17 项通过。
 - 聚焦握手与 arrival 调度用例：43 项通过。
 - 新增 Ascend 广播、Hash、wrapper、lmhead TP 用例：4 项通过。
-- 边端 V2 选择与加载，以及既有水位线、MM refill 回归：18 项通过。
+- 边端 V2 选择与真实单 rank 构造、原生加载，以及既有水位线、MM refill 回归：19 项通过。
 - 既有 Ascend V2 model-runner 回归：192 项通过，1 项跳过。
 - 全部 LWD 控制面用例：158 项通过，3 项失败。
 - 全部 Ascend LWD 用例：176 项通过，18 项失败，4 项 setup error，另有 3 个 subtest 通过。

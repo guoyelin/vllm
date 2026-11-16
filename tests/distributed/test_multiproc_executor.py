@@ -14,6 +14,8 @@ import pytest
 
 from tests.utils import multi_gpu_test
 from vllm.config import VllmConfig
+from vllm.config.device import DeviceConfig
+from vllm.config.lwd import LwdConfig, LwdTopology
 from vllm.engine.arg_utils import EngineArgs
 from vllm.platforms import current_platform
 from vllm.v1.core.sched.output import SchedulerOutput
@@ -496,3 +498,60 @@ def test_multiproc_executor_multi_node():
     assert len(results) == 2, f"Expected 2 results, got {len(results)}"
     assert results[0]["success"], f"Node 0 failed: {results[0]}"
     assert results[1]["success"], f"Node 1 failed: {results[1]}"
+
+
+def test_lwd_cloud_output_rank_uses_cloud_tp_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0}, raising=False)
+    topology = LwdTopology.from_dict(
+        {
+            "deployment": {
+                "mode": 0,
+                "scene": "single_instance",
+                "hccl_world_size": 5,
+                "edges_num": 1,
+                "clouds_num": 1,
+            },
+            "feature_ctrl": {
+                "enable_early_recv": False,
+                "scramble": {
+                    "enable": False,
+                    "device_id": None,
+                    "custom_factor": None,
+                },
+            },
+            "edges": [
+                {"id": 0, "dp": [{"dp_idx": 0, "addr": "10.0.0.1", "ranks": [0]}]}
+            ],
+            "clouds": [
+                {
+                    "id": 0,
+                    "dp": [
+                        {
+                            "dp_idx": 0,
+                            "addr": "10.0.0.2",
+                            "ranks": [1, 2, 3, 4],
+                            "ctrl_port": 5550,
+                        }
+                    ],
+                }
+            ],
+            "instance_links": [{"edge": 0, "cloud": 0}],
+        }
+    )
+    vllm_config = VllmConfig(device_config=DeviceConfig(device="cpu"))
+    vllm_config.lwd_config = LwdConfig(
+        path="test",
+        role="cloud",
+        instance_id=0,
+        topology=topology,
+    )
+    vllm_config.parallel_config.world_size = 4
+    vllm_config.parallel_config.tensor_parallel_size = 4
+    executor = MultiprocExecutor.__new__(MultiprocExecutor)
+    executor.vllm_config = vllm_config
+    executor.parallel_config = vllm_config.parallel_config
+    executor.world_size = 4
+
+    assert executor._get_output_rank() == 1

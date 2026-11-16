@@ -648,6 +648,10 @@ class MultiprocExecutor(Executor):
         return
 
     def _get_output_rank(self) -> int:
+        lwd_config = getattr(self.vllm_config, "lwd_config", None)
+        if lwd_config is not None and lwd_config.role == "cloud":
+            dp_index = self.parallel_config.data_parallel_index
+            return lwd_config.instance.dp[dp_index].ranks[0]
         # Only returns ModelRunnerOutput from TP rank=0 and PP rank=-1
         # (the first TP worker of the last PP stage).
         # Example:

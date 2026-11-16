@@ -228,7 +228,7 @@ class LwdEdgeEngineCore(LwdBaseEngineCore):
     ) -> None:
         """(max_num_batched_tokens, max_num_seqs) must match every cloud DP
         rank: a mismatch makes the cloud hold prefills behind decodes forever
-        without any error."""
+        without any error. The Engram hash parameters must match too."""
         sched = self.vllm_config.scheduler_config
         local = (sched.max_num_batched_tokens, sched.max_num_seqs)
         remote = (params.max_num_batched_tokens, params.max_num_seqs)
@@ -239,7 +239,24 @@ class LwdEdgeEngineCore(LwdBaseEngineCore):
                 f"cloud={remote}; a mismatch makes the cloud hold prefills "
                 "behind decodes forever, so start both sides with the same values"
             )
+        self._lwd_check_engram_fingerprint(dp_idx, params.engram_fingerprint)
         lwd_logger.info("[cloud-params] %s limits verified: %s", dp_idx, local)
+
+    def _lwd_check_engram_fingerprint(
+        self, dp_idx: LwdConnectionId, remote: str
+    ) -> None:
+        """The edge's Engram bucket indices must address the cloud's tables:
+        both sides derive the hash parameters from their own tokenizer and
+        config, and a mismatch would hash every prompt into wrong rows
+        without any error."""
+        local = self.scheduler.lwd_model_family.engram_fingerprint()
+        if local != remote:
+            raise RuntimeError(
+                f"[LWD] Engram fingerprint mismatch on {dp_idx}: "
+                f"edge={local!r} != cloud={remote!r}; the edge's bucket "
+                "indices would address wrong table rows, so serve both sides "
+                "the same model and tokenizer"
+            )
 
     def _lwd_send_to_cloud(
         self, dp_idx: LwdConnectionId, message: LwdEdgeToCloudMessage

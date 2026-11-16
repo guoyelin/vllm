@@ -65,6 +65,9 @@ from vllm.v1.lwd_control.lwd_comm.lwd_messages import (
     lwd_decode_structured_outputs,
 )
 from vllm.v1.lwd_control.lwd_control_diag import LwdControlDiag
+from vllm.v1.lwd_control.lwd_model.lwd_model_family import (
+    lwd_cloud_engram_fingerprint,
+)
 from vllm.v1.request import Request
 
 # Sleep between retries of a full outbound queue: step metadata must not be
@@ -272,6 +275,9 @@ class LwdCloudEngineCoreMixin(LwdBaseEngineCore):
             prefix_alignment_required=self._lwd_prefix_state.alignment_required,
             prefix_use_eagle=self._lwd_prefix_state.use_eagle,
             prefix_hash_block_size=prefix_hash_block_size,
+            engram_fingerprint=lwd_cloud_engram_fingerprint(
+                self.vllm_config.model_config
+            ),
         )
         self._lwd_register_recv_hint()
         # Business messages are handed to the engine input queue. Request,

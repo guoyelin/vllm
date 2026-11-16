@@ -39,8 +39,8 @@ rank-replay 行为，并覆盖普通 decode、混合 prefill/decode、MTP 和 AC
   `ubatch_size=0`，LWD 不增加相关分支。
 - `ngram`、`draft_model` 以及其他非 MTP 投机路径。现有 Ascend 黑名单继续生效；
   LWD 自己的 V2 启动校验也必须拒绝未适配方法，不能依赖用户不强开环境变量。
-- batch-sharded sampling 和非默认 ModelState 的 hybrid/encoder 状态。遇到这些配置
-  必须 fail-fast，后续按真实需求单独适配。
+- batch-sharded sampling，以及 Qwen3.8 通用 Mamba hybrid 之外的专用 ModelState
+  （Qwen4Exp、encoder 等）。遇到这些配置必须 fail-fast，后续按真实需求单独适配。
 - **PCP/DCP 本期暂缓，不是宣称 LWD 不支持 PCP/DCP。** 未验证组合先拒绝启动，后续
   按实际需要设计 PCP 的 local/global embedding 布局和 DCP 的序列分片语义。
 - structured output 的边云迁移（F3）。当前分支尚未恢复该能力，详见 §2.3；本期不将
@@ -217,7 +217,8 @@ V2 在模型加载前拒绝：
 
 - 启用 `speculative_config` 但 `method` 不是 `mtp`（无投机配置允许）；
 - batch-sharded sampling；
-- hybrid/encoder-only 等当前未覆盖的 ModelState；
+- hybrid/encoder-only 等当前未覆盖的专用 ModelState（Qwen3.8 通用 Mamba hybrid
+  已实现组合选择；Qwen4Exp 等其他专用 state 仍需拒绝）；
 - PCP/DCP>1 等本期未验证组合，报错文案为“本期未覆盖”，不是永久不支持；
 - DBO 和其他未验证组合。
 
@@ -236,6 +237,13 @@ V2 在模型加载前拒绝：
 
 这样 `GPUModelRunner.load_model()` 只构造一次 state，不需要先建默认 state 再替换。
 `prompt_logprobs_worker` 和 speculator 后续都绑定到同一对象。
+
+Qwen3.8 的 `linear_attention` 层需要原生 Mamba 状态。Ascend 仅在通用 Mamba hybrid
+分支选择 `LwdAscendCloudMambaHybridModelState`，它通过
+`LwdAscendCloudModelState + AscendMambaHybridModelState` 的协作式继承同时保留 LWD
+prompt 注入、DOWN logits 捕获和 Mamba recurrent-state/metadata 行为，不覆写任何执行方法。
+模型自定义 state 的优先级不变，Qwen4Exp 等专用 state 不由本次组合接管；dense 选择、
+UP/DOWN 协议和 worker 流程均不变。
 
 ### 6.2 Worker 初始化顺序
 
@@ -621,6 +629,9 @@ sequenceDiagram
 13. 边端 V2 接入：worker 按开关选择 runner 和 `runner_kind`；V2 不继承 V1 runner，真实单
     rank 构造和空 KV 配置初始化不进入通用 attention cache 路径；V2 只调用一次原生 V2 模型
     加载，随后复用共享 Hash 表加载；非空 KV 配置明确拒绝。
+14. Qwen3.8 云端 state：`linear_attention` 选择 LWD/Mamba 组合，真实 CPU 构造成功，
+    prompt 注入与 DOWN logits 方法来自 LWD，attention metadata 来自原生 Mamba；
+    `full_attention` 保持默认 LWD state，模型自定义 state 不被替换。
 
 UT 优先扩展现有 `test_lwd_*`、worker/v2 和控制面测试；每个测试只覆盖一个行为，
 真实构造对象，不以“未抛异常”作为唯一判据。
@@ -697,6 +708,8 @@ MRV2 后端可以复用同一套新增公共执行语义，历史上移则作为
 - runner_kind 握手、engine/worker 一致性检查、AsyncOutput 内部输出兼容属性。
 - 上游 V2 prompt 窗口、lookahead、ModelState、DOWN builder、MTP helper、penalties。
 - Ascend runner/state 接线、Hash-MoE 固定缓冲、HCCL 广播、lmhead TP 捕获。
+- Qwen3.8 通过 `LwdAscendCloudMambaHybridModelState` 组合 LWD 与原生 Mamba state，
+  仅修改通用 Mamba hybrid 的 state 选择，dense 和模型专用 state 不变。
 - 边端 V2 runner 选择与原生 V2 加载；V1/V2 共享 `LwdEdgeExecutionMixin` 的
   embed/unembed、水位线和 Hash 表路径，V2 不继承 V1 runner；空 KV 配置不进入通用分配。
 - V1 的历史 runner、token rank、pinned staging 未迁移，未改成委托新公共组件。
@@ -707,6 +720,7 @@ MRV2 后端可以复用同一套新增公共执行语义，历史上移则作为
 - 新增上游 LWD 与 AsyncOutput 用例：17 项通过。
 - 聚焦握手与 arrival 调度用例：43 项通过。
 - 新增 Ascend 广播、Hash、wrapper、lmhead TP 用例：4 项通过。
+- Qwen3.8 选择/构造及 Ascend LWD V2、Mamba/model-runner 相关回归：260 项通过，1 项跳过。
 - 边端 V2 选择、原生加载、真实单 rank 构造及空 KV 初始化，以及既有水位线、MM refill
   回归：21 项通过。
 - 既有 Ascend V2 model-runner 回归：192 项通过，1 项跳过。

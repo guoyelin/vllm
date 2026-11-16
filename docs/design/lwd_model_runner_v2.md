@@ -264,18 +264,20 @@ worker 直接把 EMBED/UNEMBED 批次交给 `execute_lwd_embed()` 和
 `execute_lwd_unembed()`。因此本次不需要在上游新增一套公共边端执行器，只需在 Ascend
 补齐原生 V2 的构造和模型加载链，既有数据面执行方法继续复用。
 
-- 新增 `LwdEdgeModelRunnerV2(LwdEdgeModelRunner, NPUModelRunner)`，声明真实的
-  `runner_kind="v2"`。构造时显式调用 `NPUModelRunner.__init__()`，并初始化原 V1
-  `LwdBaseModelRunner` 负责的 pinned staging ring、worker 和边端执行状态；不能依赖多继承
-  MRO 中的隐式 `super()` 完成初始化，否则会进入 V1 基类。V1 的只读 `use_dcp` property
-  与原生 V2 的赋值不兼容，子类必须提供可写 setter，并用真实单 rank 构造覆盖这类冲突。
-- `load_model()` 显式调用 `NPUModelRunner.load_model()`，随后执行共享的
+- 新增 `LwdEdgeModelRunnerV2(LwdEdgeExecutionMixin, NPUModelRunner)`，声明真实的
+  `runner_kind="v2"`。V2 只继承原生 V2 runner 和不含生命周期的执行 mixin，不再继承 V1
+  `LwdEdgeModelRunner`，避免 V1 只读 property、初始化和通用 KV cache 方法经 MRO 混入。
+- `LwdEdgeExecutionMixin` 集中 embed/unembed、MM cache、Hash 表和 UP send watermark；
+  `LwdStagingMixin` 提供共享 pinned staging。V1/V2 分别通过原生构造链创建 runner 后，
+  再调用同一个 `_init_lwd_edge_execution()` 初始化这些执行状态。
+- `load_model()` 经原生 V2 MRO 加载模型，随后执行共享的
   `_load_lwd_edge_hash_tables()`。V1 仍由 `LwdBaseModelRunner.load_model()` 加载，两个版本
   都只加载一次模型，不复制权重加载或 DeepSeek V4 Hash 表解析逻辑。
 - `LwdEdgeWorker` 按 `use_v2_model_runner` 选择 V1 或 V2 runner。engine RPC 读取新类的
   `runner_kind` 后应与 engine 的 V2 决议一致，不能再由旧类的硬编码 `"v1"` 造成误报。
-- `execute_lwd_embed()`、`execute_lwd_unembed()`、MM cache、UP send watermark、
-  `_lwd_staging()` 和 `get_kv_cache_spec() == {}` 均保持原实现；worker 继续跳过原生
+- `execute_lwd_embed()`、`execute_lwd_unembed()` 和 `_lwd_staging()` 行为不变；边端
+  `get_kv_cache_spec() == {}`，`initialize_kv_cache()` 只接受无 group、无 tensor 的配置，
+  记录配置并保持 `kv_caches=[]`，不进入通用 attention cache 分配。worker 继续跳过原生
   warmup/capture，UP/DOWN 协议和 seqno 不变。
 - 本次只修复边端 V1/V2 选择问题。云侧 `AscendMambaHybridModelState` 等未适配的
   ModelState 仍按 §5.3 拒绝启动，不因边端修复而放宽。
@@ -552,8 +554,10 @@ sequenceDiagram
 | --- | --- |
 | `worker/lwd_cloud_model/lwd_cloud_worker.py` | 前置 prompt-embed 开关、按 runner_kind 构造、统一 worker sample 后处理；其余 V1 路径不变。 |
 | `worker/lwd_edge_model/lwd_edge_worker.py` | 按 runner 开关选择边端 V1/V2 runner，embed/unembed 直调路径不变。 |
-| `worker/lwd_edge_model/v2/model_runner.py` | 新增边端 V2 runner，显式复用原生 V2 构造和加载，复用既有数据面执行。 |
-| `worker/lwd_edge_model/lwd_edge_model_runner.py` | 提取边端执行状态和 Hash 表加载 helper，V1 执行顺序不变。 |
+| `worker/lwd_edge_model/v2/model_runner.py` | 新增边端 V2 runner，只继承原生 V2 runner 与共享执行 mixin。 |
+| `worker/lwd_edge_model/lwd_edge_execution.py` | 共享 embed/unembed、MM cache、Hash 表、UP 水位线和空 KV cache 初始化。 |
+| `worker/lwd_edge_model/lwd_edge_model_runner.py` | 保留 V1 构造与加载链，复用共享执行 mixin。 |
+| `worker/lwd_base_model/lwd_staging_mixin.py` | 提取供 V1/V2 共用的 pinned staging 工厂。 |
 | `worker/lwd_base_model/lwd_worker_base.py` | 增加实际 runner_kind 查询 RPC。 |
 | `worker/lwd_cloud_model/v2/model_runner.py` | 新增 `LwdAscendCloudModelRunnerV2`。 |
 | `worker/lwd_cloud_model/v2/model_state.py` | 新增 `LwdAscendCloudModelState` 和 state 选择接线。 |
@@ -614,9 +618,9 @@ sequenceDiagram
     扩展点。
 12. V1 无回归：既有 LWD 单测保持通过，V1 runner、token rank、pinned staging 和 DOWN
     路径没有因 V2 接入被替换。
-13. 边端 V2 接入：worker 按开关选择 runner 和 `runner_kind`；真实单 rank 构造覆盖
-    V1 只读属性与 V2 初始化赋值的冲突；V2 只调用一次原生 V2 模型加载，随后复用共享
-    Hash 表加载。
+13. 边端 V2 接入：worker 按开关选择 runner 和 `runner_kind`；V2 不继承 V1 runner，真实单
+    rank 构造和空 KV 配置初始化不进入通用 attention cache 路径；V2 只调用一次原生 V2 模型
+    加载，随后复用共享 Hash 表加载；非空 KV 配置明确拒绝。
 
 UT 优先扩展现有 `test_lwd_*`、worker/v2 和控制面测试；每个测试只覆盖一个行为，
 真实构造对象，不以“未抛异常”作为唯一判据。
@@ -686,14 +690,15 @@ P0 不做任何历史模块搬迁。P1 未通过前不进入图模式，P2 未�
 这样既避免新增代码未来再次上移，也把 V1 回归面限制在 V2 必需的接线上。后续其他
 MRV2 后端可以复用同一套新增公共执行语义，历史上移则作为独立工作单独评审。
 
-## 19. 实现与验证现状（2026-11-11）
+## 19. 实现与验证现状（2026-11-16）
 
 ### 已实现代码
 
 - runner_kind 握手、engine/worker 一致性检查、AsyncOutput 内部输出兼容属性。
 - 上游 V2 prompt 窗口、lookahead、ModelState、DOWN builder、MTP helper、penalties。
 - Ascend runner/state 接线、Hash-MoE 固定缓冲、HCCL 广播、lmhead TP 捕获。
-- 边端 V2 runner 选择与原生 V2 加载，既有 embed/unembed、水位线和 Hash 表路径复用。
+- 边端 V2 runner 选择与原生 V2 加载；V1/V2 共享 `LwdEdgeExecutionMixin` 的
+  embed/unembed、水位线和 Hash 表路径，V2 不继承 V1 runner；空 KV 配置不进入通用分配。
 - V1 的历史 runner、token rank、pinned staging 未迁移，未改成委托新公共组件。
 - PCP/DCP、structured output、DBO、ngram、draft_model、batch-sharded sampling 保持本期边界；PCP/DCP 是暂缓而非永久不支持。
 
@@ -702,7 +707,8 @@ MRV2 后端可以复用同一套新增公共执行语义，历史上移则作为
 - 新增上游 LWD 与 AsyncOutput 用例：17 项通过。
 - 聚焦握手与 arrival 调度用例：43 项通过。
 - 新增 Ascend 广播、Hash、wrapper、lmhead TP 用例：4 项通过。
-- 边端 V2 选择与真实单 rank 构造、原生加载，以及既有水位线、MM refill 回归：19 项通过。
+- 边端 V2 选择、原生加载、真实单 rank 构造及空 KV 初始化，以及既有水位线、MM refill
+  回归：21 项通过。
 - 既有 Ascend V2 model-runner 回归：192 项通过，1 项跳过。
 - 全部 LWD 控制面用例：158 项通过，3 项失败。
 - 全部 Ascend LWD 用例：176 项通过，18 项失败，4 项 setup error，另有 3 个 subtest 通过。

@@ -34,6 +34,7 @@ LWD (Layerwise Disaggregated) 是基于 vLLM v1 引擎的边云分布式推理�
 ## LWD MRV2 模块地图（实现候选）
 
 - `vllm/v1/worker/gpu/lwd/`：新增公共 V2 runner/state、窗口注入、DOWN builder、MTP、penalties 与纯 torch 辅助组件。历史 V1 模块保持原位，未切换到这些新组件。
+- Ascend 边端在 `lwd_edge_execution.py` 共享 embed/unembed 直调执行，V2 只继承原生 V2 runner 与执行 mixin，不继承 V1 runner；边端无 KV cache，空配置不进入通用 cache 分配。
 - `control_scheduler/lwd_base_engine.py` 与 `lwd_comm/`：engine/worker runner_kind 一致性检查及边云握手版本校验；缺省按 V1 处理，V1/V2 不混用。
 - 云侧 W2 对非最终 prefill 额外要求 `start + rows + num_prefill_lookahead_tokens <= W1`，保证 MTP 使用真实下一行 embedding。
 - 当前状态：CPU UT 仅覆盖部分行为；910B/C 上的 eager/PIECEWISE/FULL、MTP、TP/EP、lmhead TP 与 prefix/abort 场景尚未完成验证。设计见 `docs/design/lwd_model_runner_v2.md`。进入 PR 前必须补 RFC issue，暂不宣称已支持 MRV2。

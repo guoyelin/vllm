@@ -45,6 +45,7 @@ from vllm.v1.lwd_control.control_scheduler.lwd_base_engine import (
     LwdBaseEngineCore,
 )
 from vllm.v1.lwd_control.control_scheduler.lwd_base_scheduler import (
+    lwd_draft_slots,
     lwd_spec_factor,
 )
 from vllm.v1.lwd_control.lwd_comm.lwd_id_adapter import unwrap_req_id, wrap_req_id
@@ -275,6 +276,7 @@ class LwdCloudEngineCoreMixin(LwdBaseEngineCore):
             prefix_alignment_required=self._lwd_prefix_state.alignment_required,
             prefix_use_eagle=self._lwd_prefix_state.use_eagle,
             prefix_hash_block_size=prefix_hash_block_size,
+            num_draft_slots=lwd_draft_slots(self.vllm_config),
             engram_fingerprint=lwd_cloud_engram_fingerprint(
                 self.vllm_config.model_config
             ),

@@ -53,6 +53,7 @@ from vllm.v1.lwd_control.control_edge_scheduler.lwd_edge_picker import (
 from vllm.v1.lwd_control.control_scheduler.lwd_base_scheduler import (
     LwdBaseScheduler,
     LwdReqPhase,
+    lwd_draft_slots,
 )
 from vllm.v1.lwd_control.lwd_comm.lwd_messages import (
     LWD_NOT_FINISHED,
@@ -145,11 +146,17 @@ class LwdEdgeScheduler(LwdBaseScheduler):
         # delivering link's dp_idx, consumed within a scheduling step to
         # produce an UNEMBED batch
         self.unembed_notify_queue: deque[tuple[LwdConnectionId, LwdC2eNotify]] = deque()
-        # Per-model-family admission metadata: whole-prompt M-RoPE
-        # positions for multimodal families. Computed once at admission from
-        # the real prompt (only the edge holds it) and announced with the
-        # request; reclaimed by the harvest reconciliation once the prompt
-        # is fully sent.
+        # Parallel-drafting slots the cloud charges per scheduled request
+        # (lwd_base_scheduler.lwd_draft_slots); the picker budgets them so
+        # a batch does not arrive wider than the cloud step can take. The
+        # cloud cuts its own windows from arrivals and room, so this makes
+        # truncation rarer -- it does not align the two sides' boundaries.
+        self._lwd_draft_slots: int = lwd_draft_slots(self.vllm_config)
+        # Per-model-family admission metadata: whole-prompt M-RoPE positions
+        # for multimodal families, image placeholder runs for DeepSeek V4.1.
+        # Computed once at admission from the real prompt (only the edge
+        # holds it) and announced with the request; reclaimed by the harvest
+        # reconciliation once the prompt is fully sent.
         self.lwd_model_family: LwdModelFamily = lwd_select_model_family(
             self.vllm_config
         )
@@ -607,6 +614,7 @@ class LwdEdgeScheduler(LwdBaseScheduler):
                 and account.prefix_alignment_tokens > 0
                 else self._lwd_chunk_unit
             ),
+            slot_overhead=self._lwd_draft_slots,
         )
         return req_ids, expected, cap
 

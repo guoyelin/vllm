@@ -232,6 +232,10 @@ class LwdCloudParamsNotify(msgspec.Struct, gc=False, tag=True):  # type: ignore[
     prefix_alignment_required: bool = False
     prefix_use_eagle: bool = False
     prefix_hash_block_size: int = 0
+    num_draft_slots: int = 0
+    """Extra input slots per scheduled request for parallel drafting
+    (`max_num_new_slots_for_drafting`); the edge picker budgets them so a
+    batch does not arrive wider than the cloud step can take."""
     engram_fingerprint: str = ""
     """Digest of the cloud's Engram hash parameters; empty without Engram.
     A mismatch makes the edge's bucket indices land on wrong table rows."""

@@ -57,6 +57,7 @@ def lwd_pick_prefill_batch(
     cap: int,
     free_seq: int,
     chunk_unit: int,
+    slot_overhead: int = 0,
 ) -> tuple[list[str], dict[str, int]]:
     """Pick the next embed batch, returning (req_ids, expected).
 
@@ -68,6 +69,10 @@ def lwd_pick_prefill_batch(
     new requests is clamped by free_seq; tail truncation: the last entry
     in the batch may be cut short by the remaining budget (cap − used),
     and a truncation closes the batch.
+
+    slot_overhead: budget each new start consumes on top of its chunk (the
+    cloud's per-request parallel-drafting slots; resumes are in flight, so
+    the caller's cap already reserves theirs); 0 = none.
     """
     picked: list[str] = []
     expected: dict[str, int] = {}
@@ -82,6 +87,7 @@ def lwd_pick_prefill_batch(
         cap,
         free_seq,
         chunk_unit,
+        slot_overhead,
     )
     return picked, expected
 
@@ -93,22 +99,23 @@ def _append_chunk(
     cap: int,
     request_id: str,
     chunk: int,
+    overhead: int,
 ) -> tuple[int, bool]:
-    """Pack one chunk into the batch; when used + chunk exceeds the
-    budget, fall back to tail truncation (remaining budget c = cap − used;
-    the entry joins only if c ≥ 1, and the truncated piece still consumes
-    budget). A truncation closes the batch. Returns (new used, whether
-    the batch is closed)."""
-    if used + chunk > cap:
-        c = cap - used
+    """Pack one chunk into the batch, consuming chunk + overhead of the
+    budget; when that exceeds the budget, fall back to tail truncation
+    (remaining budget c = cap − used − overhead; the entry joins only if
+    c ≥ 1, and the truncated piece still consumes budget). A truncation
+    closes the batch. Returns (new used, whether the batch is closed)."""
+    if used + chunk + overhead > cap:
+        c = cap - used - overhead
         if c >= 1:
             picked.append(request_id)
             expected[request_id] = c
-            used += c
+            used += c + overhead
         return used, True
     picked.append(request_id)
     expected[request_id] = chunk
-    return used + chunk, False
+    return used + chunk + overhead, False
 
 
 def _pick_resumes(
@@ -119,7 +126,9 @@ def _pick_resumes(
     chunk_unit: int,
 ) -> int:
     """Resume loop: walk requests in running order, each taking
-    c = min(remaining, C). Returns used."""
+    c = min(remaining, C). A resume is in flight already, so the caller's
+    cap has reserved its slot overhead and this loop charges none.
+    Returns used."""
     used = 0
     for cand in running:
         remaining = cand.num_prompt_tokens - cand.num_computed_tokens
@@ -132,6 +141,7 @@ def _pick_resumes(
             cap,
             cand.request_id,
             min(remaining, chunk_unit),
+            overhead=0,
         )
         if batch_closed:
             break
@@ -146,10 +156,12 @@ def _pick_new_requests(
     cap: int,
     free_seq: int,
     chunk_unit: int,
+    slot_overhead: int,
 ) -> int:
     """New-start loop: take the FCFS prefix of the waiting order,
     c = min(prompt, C), new-start count ≤ free_seq; never skip the queue
-    head (preserves FCFS and seqno chain order). Returns used."""
+    head (preserves FCFS and seqno chain order). Each new start also
+    consumes the budget's slot overhead. Returns used."""
     for new_count, cand in enumerate(waiting):
         remaining = cand.num_prompt_tokens - cand.num_computed_tokens
         if remaining <= 0:
@@ -158,7 +170,7 @@ def _pick_new_requests(
         if new_count >= free_seq:
             break
         used, batch_closed = _append_chunk(
-            picked, expected, used, cap, cand.request_id, chunk
+            picked, expected, used, cap, cand.request_id, chunk, slot_overhead
         )
         if batch_closed:
             break

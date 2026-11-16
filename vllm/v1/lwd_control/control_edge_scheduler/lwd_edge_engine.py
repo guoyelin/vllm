@@ -123,6 +123,7 @@ class LwdEdgeEngineCore(LwdBaseEngineCore):
             self._lwd_cloud_params_received.clear()
         for dp_idx, params in self._lwd_cloud_params.items():
             self._lwd_check_cloud_params(dp_idx, params)
+        self._lwd_adopt_cloud_draft_slots()
         self._lwd_configure_prefix_cache()
         self._lwd_coord_clients: dict[LwdConnectionId, LwdCoordClient] = {
             dp_idx: LwdCoordClient(dp_idx.dp_idx, params.dp_coordinator_addr)
@@ -257,6 +258,29 @@ class LwdEdgeEngineCore(LwdBaseEngineCore):
                 "indices would address wrong table rows, so serve both sides "
                 "the same model and tokenizer"
             )
+
+    def _lwd_adopt_cloud_draft_slots(self) -> None:
+        """Adopt the cloud's per-request drafting slots: they reserve input
+        budget of cloud steps, and the edge has no legitimate local source
+        (a spec config on the edge would start the draft machinery). The
+        edge picker budgets them so a batch does not arrive wider than the
+        cloud step can take; the cloud still cuts its own windows from
+        arrivals and room, and the two sides' boundaries need not match."""
+        remote = {params.num_draft_slots for params in self._lwd_cloud_params.values()}
+        if len(remote) != 1:
+            raise RuntimeError(
+                f"[LWD] inconsistent drafting slots across cloud DP ranks: "
+                f"{sorted(remote)}"
+            )
+        draft_slots = remote.pop()
+        if draft_slots == self.scheduler._lwd_draft_slots:
+            return
+        lwd_logger.warning(
+            "[cloud-params] adopt cloud draft_slots=%d over edge local %d",
+            draft_slots,
+            self.scheduler._lwd_draft_slots,
+        )
+        self.scheduler._lwd_draft_slots = draft_slots
 
     def _lwd_send_to_cloud(
         self, dp_idx: LwdConnectionId, message: LwdEdgeToCloudMessage

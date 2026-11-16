@@ -38,6 +38,20 @@ def lwd_spec_factor(vllm_config) -> int:
     return (num_spec_tokens or 0) + 1
 
 
+def lwd_draft_slots(vllm_config) -> int:
+    """Extra input slots the native scheduler charges per scheduled request
+    for parallel drafting (`max_num_new_slots_for_drafting`: K-1 for DSpark,
+    0 for MTP), on top of its scheduled tokens. Budgeting them keeps a batch
+    from arriving wider than the cloud step can take; the cloud still cuts
+    its own windows from arrivals and room, and the two sides' boundaries
+    need not match. The edge adopts the cloud's value from
+    `LwdCloudParamsNotify`, like the spec factor."""
+    spec_config = getattr(vllm_config, "speculative_config", None)
+    if spec_config is None:
+        return 0
+    return spec_config.max_num_new_slots_for_drafting
+
+
 class LwdReqPhase(Enum):
     """Working phase of a request (same criterion on edge and cloud):
     PREFILL = embedding not fully sent (num_computed < num_prompt), DECODE
@@ -114,7 +128,8 @@ class LwdBaseScheduler(AsyncScheduler):
         invisible to native concurrent admission; slots are deducted by the
         hidden count to prevent over-issue (edge-side picker free_seq and
         cloud-side preflight are the first line of defense; this is defense
-        in depth)."""
+        in depth).
+"""
         picked = {self.requests[req_id] for req_id in req_ids}
         from_running = [req for req in self.running if req in picked]
         from_waiting = [req for req in self.waiting if req in picked]

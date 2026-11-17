@@ -421,11 +421,6 @@ class LwdCloudScheduler(LwdBaseScheduler):
         )
         self._lwd_cleanup_arrivals(engine_core_outputs)
         carrier = getattr(model_runner_output, "lwd_down_carrier", None)
-        lwd_logger.info(
-            "[Lwd][diag] scheduler output carrier=%s req_ids=%s",
-            carrier is not None,
-            getattr(model_runner_output, "req_ids", []),
-        )
         if carrier is not None:
             self._lwd_append_carrier_c2e(carrier, engine_core_outputs, nonce_snapshot)
         elif LwdControlDiag.disable_down_enabled():

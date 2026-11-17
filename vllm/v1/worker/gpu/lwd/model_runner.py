@@ -145,6 +145,7 @@ class LwdCloudModelRunnerMixin(GPUModelRunner):
                     req_ids=req_ids,
                     valid_rows=valid_rows,
                     num_draft_tokens_per_req=num_draft,
+                    num_sampled_tokens=num_sampled,
                 )
             )
         return sampler_output, num_sampled, num_rejected

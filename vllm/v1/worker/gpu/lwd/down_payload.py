@@ -18,6 +18,7 @@ class LwdDownBatch(NamedTuple):
     req_ids: list[str]
     valid_rows: np.ndarray
     num_draft_tokens_per_req: np.ndarray | None = None
+    num_sampled_tokens: torch.Tensor | None = None
 
 
 class LwdDownPayload(NamedTuple):
@@ -51,6 +52,12 @@ class LwdDownPayloadBuilder:
         sampled = batch.sampled_token_ids
         if sampled.dim() != 2:
             return None
+        if batch.num_sampled_tokens is not None:
+            positions = torch.arange(sampled.shape[1], device=sampled.device)
+            sampled = sampled.masked_fill(
+                positions.unsqueeze(0) >= batch.num_sampled_tokens.unsqueeze(1), -1
+            )
+            batch = batch._replace(sampled_token_ids=sampled)
         valid = batch.valid_rows[: len(batch.req_ids)].astype(bool)
         if batch.num_draft_tokens_per_req is None:
             selection = self._pack_plain_rows(batch, valid)

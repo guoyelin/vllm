@@ -89,3 +89,31 @@ def test_down_payload_returns_none_without_valid_requests() -> None:
     )
 
     assert builder.build(batch) is None
+
+
+def test_spec_down_payload_masks_unwritten_sampled_tail() -> None:
+    builder = LwdDownPayloadBuilder(torch.device("cpu"))
+    sampled_token_ids = torch.tensor([[1, 99, 2], [3, 2, -1]])
+    batch = LwdDownBatch(
+        sample_hidden_states=torch.arange(12, dtype=torch.float32).view(4, 3),
+        logits=torch.tensor(
+            [
+                [0.0, 3.0, 1.0, 2.0],
+                [0.0, 3.0, 1.0, 2.0],
+                [0.0, 2.0, 1.0, 3.0],
+                [0.0, 2.0, 1.0, 3.0],
+            ]
+        ),
+        sampled_token_ids=sampled_token_ids,
+        req_ids=["a", "b"],
+        valid_rows=np.array([True, True]),
+        num_draft_tokens_per_req=np.array([2, 1], dtype=np.int32),
+        num_sampled_tokens=torch.tensor([1, 2], dtype=torch.int32),
+    )
+
+    payload = builder.build(batch)
+
+    assert payload is not None
+    assert payload.meta_dev.tolist() == [0, 0, 0, 0, 1, 1]
+    assert payload.seg_lens_host == [3, 1]
+    assert sampled_token_ids.tolist() == [[1, 99, 2], [3, 2, -1]]

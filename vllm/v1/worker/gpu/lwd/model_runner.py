@@ -120,7 +120,7 @@ class LwdCloudModelRunnerMixin(GPUModelRunner):
         input_batch: InputBatch,
         grammar_output: GrammarOutput | None,
     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
-        wire_endpoint = get_tp_group().is_first_rank
+        wire_endpoint = get_tp_group().rank_in_group == 0
         if not wire_endpoint:
             return super().sample(hidden_states, input_batch, grammar_output)
         sample_hidden_states = hidden_states[input_batch.logits_indices]

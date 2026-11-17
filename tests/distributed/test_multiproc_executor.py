@@ -554,4 +554,5 @@ def test_lwd_cloud_output_rank_uses_cloud_tp_leader(
     executor.parallel_config = vllm_config.parallel_config
     executor.world_size = 4
 
-    assert executor._get_output_rank() == 1
+    # Executor ranks are local to the cloud instance, not global HCCL ranks.
+    assert executor._get_output_rank() == 0

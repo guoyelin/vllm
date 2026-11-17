@@ -490,6 +490,11 @@ class MultiprocExecutor(Executor):
             send_method = method
         else:
             send_method = cloudpickle.dumps(method, protocol=pickle.HIGHEST_PROTOCOL)
+        if method == "sample_tokens":
+            lwd_logger.info(
+                "[Lwd][diag] collective sample_tokens output_rank=%s",
+                output_rank,
+            )
         self.rpc_broadcast_mq.enqueue((send_method, args, kwargs, output_rank))
 
         response_mqs: Sequence[MessageQueue] = self.response_mqs
@@ -1104,6 +1109,10 @@ class WorkerProc:
         if ready_event is not None:
             delattr(inner, "lwd_meta_ready_event")
         carrier = getattr(inner, "lwd_down_carrier", None)
+        lwd_logger.info(
+            "[Lwd][diag] enqueue-output carrier=%s",
+            carrier is not None,
+        )
         if carrier is not None and len(carrier) == 5:
             if ready_event is None:
                 raise RuntimeError("LWD DOWN carrier is missing its ready event")
@@ -1119,12 +1128,27 @@ class WorkerProc:
                 buf = torch.empty(max(n_meta, 4096), dtype=torch.int32, pin_memory=True)
                 self._lwd_harvest_pinned = buf
             started = time.monotonic()
+            lwd_logger.info(
+                "[Lwd][diag] meta-harvest-begin rank=%d ts=%.3f",
+                getattr(self, "rank", -1),
+                started,
+            )
             with torch.npu.stream(stream):
                 stream.wait_event(ready_event)
+                lwd_logger.info(
+                    "[Lwd][diag] meta-event-ready rank=%d ts=%.3f",
+                    getattr(self, "rank", -1),
+                    time.monotonic(),
+                )
                 buf[:n_dev].copy_(meta_dev, non_blocking=True)
                 done = torch.npu.Event()
                 done.record()
             done.synchronize()
+            lwd_logger.info(
+                "[Lwd][diag] meta-copy-done rank=%d ts=%.3f",
+                getattr(self, "rank", -1),
+                time.monotonic(),
+            )
             if n_seg:
                 buf.numpy()[n_dev:n_meta] = seg_lens_host
             inner.lwd_down_carrier = (
@@ -1222,6 +1246,13 @@ class WorkerProc:
             watchdog.feed()
 
             if output_rank is None or self.rank == output_rank:
+                if method == "sample_tokens":
+                    lwd_logger.info(
+                        "[Lwd][diag] worker-output rank=%d output_rank=%s type=%s",
+                        self.rank,
+                        output_rank,
+                        type(output).__name__,
+                    )
                 self.handle_output(output)
         except Exception as e:
             # Notes have been introduced in python 3.11

@@ -732,6 +732,11 @@ class LwdCloudEngineCoreMixin(LwdBaseEngineCore):
         if self.scheduler.pending_c2e:
             assert self._lwd_edge is not None, "c2e produced before any edge"
             for notify in self.scheduler.pending_c2e:
+                lwd_logger.info(
+                    "[Lwd][diag] cloud send c2e seqno=%s reqs=%s",
+                    getattr(notify, "down_seqno", None),
+                    getattr(notify, "req_ids", []),
+                )
                 self._lwd_send_until_queued(self._lwd_edge, notify)
             self.scheduler.pending_c2e.clear()
         super().post_step(model_executed)
